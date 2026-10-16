@@ -91,6 +91,7 @@ export async function fileAuthorship(fullName, path, username, ref) {
       commitUrl: c.html_url,
       authorLogin: c.author?.login || username,
       committedAt: c.commit?.committer?.date || c.commit?.author?.date,
+      authoredAt: c.commit?.author?.date,
       verified: Boolean(c.commit?.verification?.verified),
     };
   } catch (e) {
@@ -161,4 +162,46 @@ export async function compare(fullName, base, head) {
 export async function commitFiles(fullName, sha) {
   const { data } = await o().repos.getCommit({ ...split(fullName), ref: sha });
   return { files: norm(data.files), commitCount: 1, commits: meta([data]) };
+}
+
+// ---------- commit history (for the integrity audit) ----------
+const slim = (c) => ({
+  sha: c.sha,
+  message: (c.commit?.message || '').split('\n')[0].slice(0, 120),
+  authorDate: c.commit?.author?.date,
+  committerDate: c.commit?.committer?.date,
+});
+
+/** This user's commits that touched one file (newest first, max 100). */
+export async function fileHistory(fullName, path, username, ref) {
+  try {
+    const { data } = await o().repos.listCommits({ ...split(fullName), sha: ref, path, author: username, per_page: 100 });
+    return data.map(slim);
+  } catch (e) {
+    if (e.status === 409) return [];
+    throw e;
+  }
+}
+
+/** This user's latest 100 commits in a repo (for burst / repeated-message checks). */
+export async function userCommits(fullName, username, ref) {
+  try {
+    const { data } = await o().repos.listCommits({ ...split(fullName), sha: ref, author: username, per_page: 100 });
+    return data.map(slim);
+  } catch (e) {
+    if (e.status === 409) return [];
+    throw e;
+  }
+}
+
+// A commit never changes, so its diff can be cached forever.
+const detailCache = new Map();
+export function commitDetail(fullName, sha) {
+  const k = `${fullName}@${sha}`;
+  if (!detailCache.has(k)) {
+    detailCache.set(k, o().repos.getCommit({ ...split(fullName), ref: sha })
+      .then((r) => ({ files: norm(r.data.files) }))
+      .catch((e) => { detailCache.delete(k); throw e; }));
+  }
+  return detailCache.get(k);
 }
