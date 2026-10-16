@@ -6,7 +6,7 @@ export default function SkillCard({ a, flash }) {
     <article className={`card ${ok ? 'ok' : 'gap'} ${flash ? 'flash' : ''}`}>
       <header>
         <h3>{a.skill}</h3>
-        <span className={`badge ${ok ? 'on' : 'off'}`}>{ok ? 'Demonstrated' : 'Not demonstrated in this scope'}</span>
+        <span className={`badge ${ok ? 'on' : 'off'}`}>{ok ? '✓ Demonstrated' : '◔ Not demonstrated in this scope'}</span>
       </header>
       <p className="meta">
         {a.importance === 'preferred' ? 'Preferred' : 'Required'} by the job · Confidence {Math.round((a.confidence || 0) * 100)}%
