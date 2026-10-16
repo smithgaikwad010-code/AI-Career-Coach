@@ -22,6 +22,7 @@ cd client
 npm install
 npm run dev                 # http://localhost:5173 (proxies /api to :5000)
 ```
+<img width="1094" height="635" alt="image" src="https://github.com/user-attachments/assets/0ba8e186-0597-4f47-b079-16dea54f1cab" />
 
 ## Environment variables (`server/.env`, never committed)
 
