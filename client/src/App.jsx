@@ -3,7 +3,7 @@ import InputForm from './components/InputForm.jsx';
 import Summary from './components/Summary.jsx';
 import SkillCard from './components/SkillCard.jsx';
 import Timeline from './components/Timeline.jsx';
-import { analyze, getProfile, parseGithubUser } from './api.js';
+import { analyze, getProfile, parseGithubUser, getCommitHistory } from './api.js';
 
 const EMPTY = { jobUrl: '', jobText: '', githubLink: '' };
 const store = {
@@ -32,6 +32,10 @@ export default function App() {
   const [connected, setConnected] = useState(false);
   const [lastPoll, setLastPoll] = useState(null);
   const [tab, setTab] = useState('all');
+  const [commitData, setCommitData] = useState(null);
+  const [commitLoading, setCommitLoading] = useState(false);
+  const [commitError, setCommitError] = useState('');
+  const [commitUsername, setCommitUsername] = useState('');
   const flashTimer = useRef();
   const username = view?.profile.username;
 
@@ -77,6 +81,25 @@ export default function App() {
 
   const onChange = (k, val) => { setValues((v) => ({ ...v, [k]: val })); setErrors((er) => ({ ...er, [k]: undefined })); };
   const pickJob = (j) => setValues((v) => ({ ...v, jobUrl: j.url, jobText: j.text }));
+  async function loadCommits() {
+    const parsed = parseGithubUser(values.githubLink || username || '');
+    if (!parsed) {
+      setCommitError('Enter a valid GitHub username or profile link first.');
+      return;
+    }
+    setCommitLoading(true);
+    setCommitError('');
+    setCommitData(null);
+    setCommitUsername(parsed);
+    try {
+      setCommitData(await getCommitHistory(parsed));
+    } catch (err) {
+      setCommitError(err.message || 'Could not load GitHub commit history.');
+    } finally {
+      setCommitLoading(false);
+    }
+  }
+
   const demonstrated = view?.assessments.filter((a) => a.status === 'demonstrated') || [];
   const gaps = view?.assessments.filter((a) => a.status !== 'demonstrated') || [];
 
@@ -91,6 +114,49 @@ export default function App() {
       <main className="layout">
         <section className="col" aria-label="Input and live activity">
           <InputForm values={values} errors={errors} loading={loading} onChange={onChange} onSubmit={submit} onPickJob={pickJob} />
+          <section className="panel commit-panel" aria-label="GitHub commit history">
+            <h2>GitHub repository commits</h2>
+            <p className="muted">Load the actual first and latest commit for every public, non-fork repository owned by this GitHub user.</p>
+            <button type="button" className="btn secondary" onClick={loadCommits} disabled={commitLoading}>
+              {commitLoading ? 'Loading repositories…' : `Load commit history${commitUsername ? ` for ${commitUsername}` : ''}`}
+            </button>
+            {commitError && <p className="field-error" role="alert">{commitError}</p>}
+            {commitData && (
+              <>
+                <p className="muted">
+                  Found {commitData.totalRepositories} public, non-fork repositories for @{commitData.username}.
+                </p>
+                {commitData.repositories.length === 0 && <p>No public repositories found.</p>}
+                <div className="repo-commit-list">
+                  {commitData.repositories.map((repo) => (
+                    <article className="repo-commit-card" key={repo.fullName}>
+                      <h3><a href={repo.url} target="_blank" rel="noreferrer">{repo.fullName}</a></h3>
+                      {repo.error && <p className="field-error">{repo.error}</p>}
+                      {!repo.error && !repo.firstCommit && !repo.latestCommit && <p className="muted">No commits yet (empty repository).</p>}
+                      {repo.firstCommit && (
+                        <p>
+                          <strong>First commit:</strong>{' '}
+                          {repo.firstCommit.date ? new Date(repo.firstCommit.date).toLocaleString() : 'Date unavailable'}
+                          {' — '}
+                          <a href={repo.firstCommit.url} target="_blank" rel="noreferrer">{repo.firstCommit.sha.slice(0, 7)}</a>
+                          {' — '}{repo.firstCommit.message}
+                        </p>
+                      )}
+                      {repo.latestCommit && (
+                        <p>
+                          <strong>Latest commit:</strong>{' '}
+                          {repo.latestCommit.date ? new Date(repo.latestCommit.date).toLocaleString() : 'Date unavailable'}
+                          {' — '}
+                          <a href={repo.latestCommit.url} target="_blank" rel="noreferrer">{repo.latestCommit.sha.slice(0, 7)}</a>
+                          {' — '}{repo.latestCommit.message}
+                        </p>
+                      )}
+                    </article>
+                  ))}
+                </div>
+              </>
+            )}
+          </section>
           {apiError && <div className="alert" role="alert"><strong>Analysis failed.</strong> {apiError}</div>}
           {warnings.map((w) => <div className="alert" role="status" key={w}>{w}</div>)}
           <Timeline history={history} watching={view?.profile.repos.length || 0} connected={connected} lastPoll={lastPoll} active={!!view} />
@@ -134,7 +200,7 @@ export default function App() {
               <div className="note">
                 <span aria-hidden="true">ⓘ</span>
                 <span>
-                  <strong>About uncertainty.</strong> This assessment only covers the latest 8 public, non-fork repositories and the files scanned.
+                  <strong>About uncertainty.</strong> This assessment only covers the latest 8 public, non-fork repositories and the files scanned. The commit-history panel separately checks all public, non-fork repositories.
                   “Not demonstrated in this scope” does not prove the student lacks the skill: it may live in private work, older repositories, or experience outside code.
                 </span>
               </div>

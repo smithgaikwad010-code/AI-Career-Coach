@@ -18,3 +18,5 @@ export function parseGithubUser(v = '') {
   const name = m ? m[1] : s;
   return /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/i.test(name) ? name : null;
 }
+
+export const getCommitHistory = (username) => req(`/api/commits/${encodeURIComponent(username)}`);

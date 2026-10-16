@@ -91,7 +91,6 @@ export async function fileAuthorship(fullName, path, username, ref) {
       commitUrl: c.html_url,
       authorLogin: c.author?.login || username,
       committedAt: c.commit?.committer?.date || c.commit?.author?.date,
-      authoredAt: c.commit?.author?.date,
       verified: Boolean(c.commit?.verification?.verified),
     };
   } catch (e) {
@@ -164,44 +163,73 @@ export async function commitFiles(fullName, sha) {
   return { files: norm(data.files), commitCount: 1, commits: meta([data]) };
 }
 
-// ---------- commit history (for the integrity audit) ----------
-const slim = (c) => ({
-  sha: c.sha,
-  message: (c.commit?.message || '').split('\n')[0].slice(0, 120),
-  authorDate: c.commit?.author?.date,
-  committerDate: c.commit?.committer?.date,
-});
-
-/** This user's commits that touched one file (newest first, max 100). */
-export async function fileHistory(fullName, path, username, ref) {
+/**
+ * List every public, non-fork repository owned by a user.
+ * Used only for the repository commit-history panel; analyzer's existing scope is unchanged.
+ */
+export async function listPublicReposForHistory(username) {
   try {
-    const { data } = await o().repos.listCommits({ ...split(fullName), sha: ref, path, author: username, per_page: 100 });
-    return data.map(slim);
+    const data = await o().paginate(o().repos.listForUser, {
+      username, type: 'owner', sort: 'pushed', per_page: 100,
+    });
+    return data
+      .filter((r) => !r.private && !r.fork)
+      .map((r) => ({
+        fullName: r.full_name,
+        url: r.html_url,
+        defaultBranch: r.default_branch,
+      }));
   } catch (e) {
-    if (e.status === 409) return [];
+    if (e.status === 404) throw new AppError(404, `GitHub user "${username}" was not found.`, 'USER_NOT_FOUND');
+    if (isRateLimit(e)) throw new AppError(429, 'GitHub API rate limit reached. Add a GITHUB_TOKEN or try again later.', 'GITHUB_RATE_LIMIT');
     throw e;
   }
 }
 
-/** This user's latest 100 commits in a repo (for burst / repeated-message checks). */
-export async function userCommits(fullName, username, ref) {
+/**
+ * Return the real newest and oldest commit on the repository's default branch.
+ * GitHub's Link header reveals the last page, so this does not mistake the latest
+ * 100 commits for the entire history. Empty repositories return null bounds.
+ */
+export async function getCommitBounds(fullName, branch) {
+  if (!branch) {
+    return { firstCommit: null, latestCommit: null, commitCountKnown: true, empty: true };
+  }
+  const args = { ...split(fullName), sha: branch, per_page: 1 };
   try {
-    const { data } = await o().repos.listCommits({ ...split(fullName), sha: ref, author: username, per_page: 100 });
-    return data.map(slim);
+    const latestResponse = await o().repos.listCommits(args);
+    const latest = latestResponse.data[0] || null;
+    if (!latest) return { firstCommit: null, latestCommit: null, commitCountKnown: false };
+
+    const link = latestResponse.headers?.link || '';
+    const lastMatch = link.match(/<[^>]*[?&]page=(\d+)[^>]*>;\s*rel="last"/);
+    const lastPage = lastMatch ? Number(lastMatch[1]) : 1;
+
+    let first = latest;
+    if (lastPage > 1) {
+      const oldestResponse = await o().repos.listCommits({
+        ...split(fullName), sha: branch, per_page: 1, page: lastPage,
+      });
+      first = oldestResponse.data[0] || latest;
+    }
+
+    const mapCommit = (c) => ({
+      sha: c.sha,
+      message: c.commit?.message?.split('\n')[0] || '(no commit message)',
+      author: c.author?.login || c.commit?.author?.name || 'Unknown',
+      date: c.commit?.committer?.date || c.commit?.author?.date || null,
+      url: c.html_url,
+    });
+
+    return {
+      firstCommit: mapCommit(first),
+      latestCommit: mapCommit(latest),
+      commitCountKnown: true,
+    };
   } catch (e) {
-    if (e.status === 409) return [];
+    if (e.status === 409 || e.status === 404) {
+      return { firstCommit: null, latestCommit: null, commitCountKnown: true, empty: true };
+    }
     throw e;
   }
-}
-
-// A commit never changes, so its diff can be cached forever.
-const detailCache = new Map();
-export function commitDetail(fullName, sha) {
-  const k = `${fullName}@${sha}`;
-  if (!detailCache.has(k)) {
-    detailCache.set(k, o().repos.getCommit({ ...split(fullName), ref: sha })
-      .then((r) => ({ files: norm(r.data.files) }))
-      .catch((e) => { detailCache.delete(k); throw e; }));
-  }
-  return detailCache.get(k);
 }

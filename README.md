@@ -35,6 +35,11 @@ npm run dev                 # http://localhost:5173 (proxies /api to :5000)
 | `WEBHOOK_SECRET` | HMAC secret for `/webhook/github` |
 | `PORT` | Defaults to 5000 |
 
+## Added features
+
+- **JD PDF upload:** upload a selectable-text PDF and its contents are extracted into the Job Description field in the browser. Scanned/image-only PDFs require OCR and are not extracted automatically.
+- **GitHub commit boundaries:** use the **Load commit history** panel to list every public, non-fork repository owned by a GitHub username, with the actual first and latest commit dates/messages. The endpoint uses GitHub pagination to find the oldest commit rather than treating the latest 100 as the full history. Configure `GITHUB_TOKEN` in `server/.env` to reduce rate-limit issues.
+
 ## How it works
 
 1. **Job skills**: Gemini returns strict JSON `[{skill, importance, jobSnippet}]` (keyword fallback if Gemini fails).
@@ -49,7 +54,7 @@ npm run dev                 # http://localhost:5173 (proxies /api to :5000)
 Expose the server (e.g. `ngrok http 5000`), then in the GitHub repo: Settings -> Webhooks -> Payload URL `https://<host>/webhook/github`, content type `application/json`, secret = `WEBHOOK_SECRET`, event: Push.
 
 ## API
-`POST /api/analyze {jobUrl, jobText, githubLink}` | `GET /api/profile/:username` | `GET /api/events` (SSE) | `GET /api/jobs?provider=greenhouse|lever&company=slug` | `POST /webhook/github` | `GET /api/health`
+`POST /api/analyze {jobUrl, jobText, githubLink}` | `GET /api/profile/:username` | `GET /api/events` (SSE) | `GET /api/commits/:username` | `GET /api/jobs?provider=greenhouse|lever&company=slug` | `POST /webhook/github` | `GET /api/health`
 
 ## Demo script
 1. Open the app. Use "Fetch jobs" (e.g. Greenhouse, company `stripe`) or paste a real posting that requires SQL, with its **source link**.

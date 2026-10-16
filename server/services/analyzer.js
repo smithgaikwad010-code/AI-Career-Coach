@@ -3,7 +3,6 @@ import * as gemini from './gemini.js';
 import { Job, Profile, Assessment, AssessmentHistory } from '../models/index.js';
 import { broadcast } from '../events.js';
 import { stripComments, isTrivialChange, decorate } from './evidenceQuality.js';
-import * as audit from './commitAudit.js';
 
 export const YES = 'demonstrated';
 export const NOT = 'not demonstrated in this scope';
@@ -11,7 +10,6 @@ const MAX_FILE = 60_000;        // max bytes per file sent to Gemini
 const MAX_PROMPT = 90_000;      // max total file bytes per Gemini call
 const MAX_FETCH_PER_REPO = 30;  // files whose content we download per repo
 const MAX_CANDIDATES = 12;
-const MAX_DIFF_SAMPLE = 6;      // diffs fetched per evidence file for the integrity audit
 
 // ---------- cheap signals ----------
 const SKIP = /(^|\/)(node_modules|vendor|dist|build|\.next|__pycache__|coverage|\.venv)\/|\.min\.|package-lock\.json$|yarn\.lock$|pnpm-lock\.yaml$/i;
@@ -169,20 +167,6 @@ function stamp(au, ctx) {
   };
 }
 
-/** Commit-history audit for one evidence file: age, bursts, repeated messages, low-impact churn.
- *  It only flags things for a human to review. It never declares a commit "fake". */
-async function auditEvidence(e, ctx) {
-  const history = await ctx.history(e.repo, e.file);
-  if (!history.length) return {};
-  const sample = [];
-  for (const h of history.slice(0, MAX_DIFF_SAMPLE)) {
-    try { sample.push({ sha: h.sha, ...(await gh.commitDetail(e.repo, h.sha)) }); }
-    catch (err) { if (gh.isRateLimit(err)) throw err; }
-  }
-  const repoFlags = audit.auditRepoCommits(await ctx.repoCommits(e.repo));
-  return { integrity: audit.auditFile(e.file, history, sample, repoFlags) };
-}
-
 /** Keeps only evidence the user actually committed (one item per file) and stamps commit/author/date.
  *  Evidence in files the user never touched is dropped; if nothing remains the skill becomes a gap. */
 async function attribute(r, ctx) {
@@ -205,39 +189,22 @@ async function attribute(r, ctx) {
       explanation: `Related code was found in ${rejected.length} file(s) (${rejected.slice(0, 3).join(', ')}), but no commits by @${ctx.username} touch them, so it is not counted as this student's work.`,
     };
   }
-
-  // Commit integrity audit (history, age, suspicious patterns). Already-audited evidence is reused.
-  const audited = await pool(kept, 3, async (e) => {
-    if (e.integrity) return e;
-    try { return { ...e, ...(await auditEvidence(e, ctx)) }; }
-    catch (err) { if (gh.isRateLimit(err)) throw err; return e; } // audit is best-effort
-  });
-
-  const best = Math.max(...audited.map((e) => e.integrity?.freshness ?? 1));
-  const staleOnly = audited.every((e) => e.integrity?.status === 'stale');
-  const staleNote = staleOnly ? ' All matching evidence is more than 2 years old, so it is not treated as proof of current skill.' : '';
   const note = rejected.length ? ` ${rejected.length} other matching file(s) were ignored because @${ctx.username} did not commit them.` : '';
-  return {
-    ...r, evidence: audited, staleOnly,
-    confidence: +(r.confidence * (0.5 + 0.5 * best)).toFixed(2),
-    explanation: `${r.explanation}${note}${staleNote}`,
-  };
+  return { ...r, evidence: kept, explanation: `${r.explanation}${note}` };
 }
 
 const evaluateSkill = async (a, candidates, getText, ctx) => attribute(await assess(a, candidates, getText), ctx);
 
-const once = (map, key, fn) => { if (!map.has(key)) map.set(key, fn()); return map.get(key); };
-
 async function makeCtx(username, refOf, observed) {
   const info = await gh.getPushInfo(username);
   const memo = new Map();
-  const hist = new Map();
-  const repoC = new Map();
   return {
     username, pushTimes: info.pushTimes, observed,
-    authorship: (repo, file) => once(memo, `${repo}:${file}`, () => gh.fileAuthorship(repo, file, username, refOf(repo))),
-    history: (repo, file) => once(hist, `${repo}:${file}`, () => gh.fileHistory(repo, file, username, refOf(repo))),
-    repoCommits: (repo) => once(repoC, repo, () => gh.userCommits(repo, username, refOf(repo))),
+    authorship: (repo, file) => {
+      const k = `${repo}:${file}`;
+      if (!memo.has(k)) memo.set(k, gh.fileAuthorship(repo, file, username, refOf(repo)));
+      return memo.get(k);
+    },
   };
 }
 

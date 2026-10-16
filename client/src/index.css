@@ -149,3 +149,11 @@ details.card .body > :first-child { margin-top: .8rem; }
 .explain { font-size: .88rem; }
 
 .timeline { max-height: 240px; }
+
+/* GitHub first/latest commit history */
+.commit-panel { margin-top: 16px; }
+.repo-commit-list { display: grid; gap: 12px; margin-top: 16px; }
+.repo-commit-card { border: 1px solid var(--line, #ddd); border-radius: 10px; padding: 12px 14px; overflow-wrap: anywhere; }
+.repo-commit-card h3 { margin: 0 0 8px; font-size: 1rem; }
+.repo-commit-card p { margin: 7px 0; line-height: 1.5; }
+.repo-commit-card a { overflow-wrap: anywhere; }
