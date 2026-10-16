@@ -1,7 +1,15 @@
 import mongoose from 'mongoose';
 const { Schema } = mongoose;
 
-const Evidence = new Schema({ repo: String, file: String, line: Number, url: String, reason: String }, { _id: false });
+const Evidence = new Schema({
+  repo: String, file: String, line: Number, url: String, reason: String,
+  // who wrote it, and when (see analyzer.js stamp())
+  commitSha: String, commitUrl: String, authorLogin: String, verified: Boolean,
+  committedAt: Date,       // effective date used for recency
+  claimedAt: Date,         // commit's own date, only stored when it differs from the push date
+  dateSource: { type: String, enum: ['observed', 'push-event', 'commit-metadata'] },
+  authorUnverified: Boolean, // authorship lookup failed (not a rejection)
+}, { _id: false });
 const ReqSkill = new Schema({
   skill: String,
   importance: { type: String, enum: ['required', 'preferred'] },
@@ -20,7 +28,7 @@ export const Job = mongoose.model('Job', new Schema({
 export const Profile = mongoose.model('Profile', new Schema({
   username: { type: String, required: true, unique: true, lowercase: true },
   jobId: { type: Schema.Types.ObjectId, ref: 'Job' },
-  repos: [new Schema({ fullName: String, defaultBranch: String, lastCheckedCommit: String }, { _id: false })],
+  repos: [new Schema({ fullName: String, defaultBranch: String, contributed: Boolean, lastCheckedCommit: String }, { _id: false })],
 }, { timestamps: true }));
 
 const assessmentSchema = new Schema({
@@ -44,5 +52,10 @@ export const AssessmentHistory = mongoose.model('AssessmentHistory', new Schema(
   repo: String,
   commit: String,
   changedFiles: [String],
+  commitCount: Number,
+  commitUrl: String,
+  authors: [String],
+  ignoredTrivial: Boolean,
+  note: String,
   skillChanges: [new Schema({ skill: String, from: String, to: String }, { _id: false })],
 }));

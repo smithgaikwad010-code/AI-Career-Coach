@@ -31,6 +31,7 @@ export default function App() {
   const [flashed, setFlashed] = useState(new Set());
   const [connected, setConnected] = useState(false);
   const [lastPoll, setLastPoll] = useState(null);
+  const [tab, setTab] = useState('all');
   const flashTimer = useRef();
   const username = view?.profile.username;
 
@@ -82,8 +83,10 @@ export default function App() {
   return (
     <>
       <header className="masthead">
-        <h1>AI Career Coach</h1>
-        <p>Compare what a job asks for with what your GitHub repositories demonstrate. Every claim links to a file or the job posting.</p>
+        <div className="masthead-in">
+          <div className="logo"><div className="mark" aria-hidden="true">CC</div><h1>AI Career Coach</h1></div>
+          <p>Show what your portfolio proves, and what it does not. Every claim links to a file or the job posting.</p>
+        </div>
       </header>
       <main className="layout">
         <section className="col" aria-label="Input and live activity">
@@ -109,16 +112,32 @@ export default function App() {
           {view && (
             <>
               <Summary assessments={view.assessments} job={view.job} repos={view.profile.repos} username={view.profile.username} />
-              <h2 className="section">Demonstrated skills</h2>
-              {demonstrated.length === 0 && <p className="muted">No required skills are demonstrated in the scanned repositories yet.</p>}
-              {demonstrated.map((a) => <SkillCard key={a.skill} a={a} flash={flashed.has(a.skill)} />)}
-              <h2 className="section">Gaps</h2>
-              {gaps.length === 0 && <p className="muted">No gaps: every extracted skill has evidence in the scanned scope.</p>}
-              {gaps.map((a) => <SkillCard key={a.skill} a={a} flash={flashed.has(a.skill)} />)}
-              <p className="note">
-                <strong>About uncertainty.</strong> This assessment only covers the latest 8 public, non-fork repositories and the files scanned.
-                “Not demonstrated in this scope” does not prove the student lacks the skill: it may live in private work, older repositories, or experience outside code.
-              </p>
+              <div className="tabs" role="group" aria-label="Filter skills">
+                {[['all', `All (${view.assessments.length})`], ['ok', `Demonstrated (${demonstrated.length})`], ['gap', `Gaps (${gaps.length})`]].map(([k, t]) => (
+                  <button key={k} type="button" className={`tab ${tab === k ? 'active' : ''}`} aria-pressed={tab === k} onClick={() => setTab(k)}>{t}</button>
+                ))}
+              </div>
+              {tab !== 'gap' && (
+                <>
+                  <h2 className="section">Demonstrated skills <span className="count ok">{demonstrated.length}</span></h2>
+                  {demonstrated.length === 0 && <p className="muted">No required skills are demonstrated in the scanned repositories yet.</p>}
+                  <div className="grid">{demonstrated.map((a) => <SkillCard key={a.skill} a={a} flash={flashed.has(a.skill)} />)}</div>
+                </>
+              )}
+              {tab !== 'ok' && (
+                <>
+                  <h2 className="section">Gaps <span className="count gap">{gaps.length}</span></h2>
+                  {gaps.length === 0 && <p className="muted">No gaps: every extracted skill has evidence in the scanned scope.</p>}
+                  <div className="grid">{gaps.map((a) => <SkillCard key={a.skill} a={a} flash={flashed.has(a.skill)} />)}</div>
+                </>
+              )}
+              <div className="note">
+                <span aria-hidden="true">ⓘ</span>
+                <span>
+                  <strong>About uncertainty.</strong> This assessment only covers the latest 8 public, non-fork repositories and the files scanned.
+                  “Not demonstrated in this scope” does not prove the student lacks the skill: it may live in private work, older repositories, or experience outside code.
+                </span>
+              </div>
             </>
           )}
         </section>

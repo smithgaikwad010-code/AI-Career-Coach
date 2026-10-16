@@ -1,0 +1,81 @@
+/* Strict black and white theme. Import LAST in main.jsx */
+:root { color-scheme: light; }
+
+html, body, #root { background: #fff; color: #000; }
+body { font-family: 'Source Sans 3', system-ui, -apple-system, 'Segoe UI', sans-serif; }
+h1, h2, h3, h4 { font-family: 'Source Serif 4', Georgia, 'Times New Roman', serif; color: #000; }
+code, kbd, pre, .files code, .evidence code { font-family: 'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace; }
+
+/* no gradients, no shadows, no rounded corners */
+*, *::before, *::after { box-shadow: none !important; text-shadow: none !important; border-radius: 0 !important; }
+header, .app-header, .site-header, .hero, .topbar, .masthead {
+  background: #fff !important; background-image: none !important; color: #000 !important;
+  border-bottom: 1px solid #d4d4d4;
+}
+header *, .app-header *, .site-header *, .hero *, .topbar *, .masthead * { color: #000 !important; }
+header p, .app-header p, .hero p, .tagline { color: #666 !important; }
+.logo, .brand-mark { background: #000 !important; color: #fff !important; }
+
+a { color: #000; text-decoration: underline; text-underline-offset: 2px; }
+.muted, .hint, .meta, .reason { color: #666; }
+
+/* panels and fields */
+.panel { background: #fff; border: 1px solid #d4d4d4; }
+input, select, textarea { background: #fff; color: #000; border: 1px solid #000; font-family: inherit; }
+input::placeholder, textarea::placeholder { color: #666; }
+.field-error { color: #000; border-left: 3px solid #000; padding-left: 8px; font-weight: 600; }
+
+/* buttons */
+.btn { background: #000; color: #fff; border: 1px solid #000; }
+.btn:hover:not(:disabled) { background: #fff; color: #000; }
+.btn.secondary { background: #fff; color: #000; border: 1px solid #000; }
+.btn.secondary:hover:not(:disabled) { background: #000; color: #fff; }
+.btn:disabled { background: #fff; color: #666; border-color: #d4d4d4; cursor: not-allowed; }
+.finder { background: #fff; border: 1px solid #d4d4d4; }
+
+/* skill cards */
+.card { background: #fff; border: 1px solid #d4d4d4; }
+.card.ok { border-left: 5px solid #000; }
+.card.gap { border-left: 5px dashed #999; }
+.badge { border: 1px solid #000; font-weight: 600; }
+.badge.on { background: #000; color: #fff; }
+.badge.off { background: #fff; color: #000; }
+.conf { background: #d4d4d4; }
+.conf i { background: #000; }
+.pill { background: #fff; color: #000; border: 1px solid #000; }
+.pill.ok { background: #000; color: #fff; }
+.pill.gap { border-style: dashed; }
+.updated { color: #000; text-decoration: underline; }
+
+/* summary ring */
+.ring { background: conic-gradient(#000 var(--p, 0%), #d4d4d4 0) !important; border-radius: 50% !important; }
+.ring b { background: #fff; color: #000; border-radius: 50% !important; }
+
+/* evidence metadata */
+.evidence { list-style: none; padding-left: 0; }
+.evidence li { border-top: 1px solid #d4d4d4; padding: 8px 0; }
+.ev-meta { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; color: #666; font-size: .85em; margin-top: 4px; }
+.ev-meta a { color: #000; }
+.tag { display: inline-block; padding: 0 6px; font-size: .78em; line-height: 1.6; border: 1px solid #000; }
+.tag.solid { background: #000; color: #fff; }
+.tag.outline { background: #fff; color: #000; border-style: dashed; }
+
+/* timeline */
+.timeline { list-style: none; padding-left: 0; }
+.timeline li { border-left: 2px solid #000; padding: 4px 0 8px 10px; margin-bottom: 4px; }
+.timeline time { color: #666; font-size: .85em; margin-right: 8px; }
+.timeline .files { display: block; color: #666; font-size: .85em; }
+
+/* keyboard focus */
+:focus-visible { outline: 3px solid #000; outline-offset: 2px; }
+.btn:focus-visible { outline-color: #000; box-shadow: 0 0 0 2px #fff, 0 0 0 5px #000 !important; }
+
+/* reassessed card highlight */
+@keyframes bw-flash { 0% { background: #000; color: #fff; } 100% { background: #fff; color: #000; } }
+.card.flash { animation: bw-flash 1.6s ease-out 1; }
+.card.flash a { color: inherit; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+  .card.flash { outline: 3px solid #000; outline-offset: 2px; }
+}

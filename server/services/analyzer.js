@@ -2,6 +2,7 @@ import * as gh from './github.js';
 import * as gemini from './gemini.js';
 import { Job, Profile, Assessment, AssessmentHistory } from '../models/index.js';
 import { broadcast } from '../events.js';
+import { stripComments, isTrivialChange, decorate } from './evidenceQuality.js';
 
 export const YES = 'demonstrated';
 export const NOT = 'not demonstrated in this scope';
@@ -78,14 +79,15 @@ export function findCandidates(skill, repo, ref, files) {
   for (const f of files) {
     const perFile = [];
     const add = (line, reason, weak = false) => perFile.length < 2 && perFile.push({ repo, file: f.path, line, url: url(f.path, line), reason, weak });
-    const lines = f.text ? f.text.split('\n') : null;
+    const clean = f.text ? stripComments(f.text, f.path) : null; // comments never count as evidence
+    const lines = clean ? clean.split('\n') : null;
     for (const r of rules) {
       if (r.ext?.some((x) => x.test(f.path))) add(1, `File type matches ${r.label}: ${f.path}`);
       else if (r.names?.some((x) => x.test(f.path))) add(1, `${r.label}-related file: ${f.path}`);
       if (r.tokens?.some((t) => f.path.toLowerCase().includes(t))) add(1, `File path mentions "${skill}"`, true);
       if (!lines) continue;
       if (r.deps && MANIFESTS.test(f.path)) {
-        const set = depsOf(f);
+        const set = depsOf({ path: f.path, text: clean });
         const d = r.deps.find((x) => set.has(x));
         if (d) add(Math.max(1, lines.findIndex((l) => l.toLowerCase().includes(d)) + 1), `Dependency "${d}" declared in ${f.path.split('/').pop()}`);
       }
@@ -94,7 +96,7 @@ export function findCandidates(skill, repo, ref, files) {
         if (i >= 0) add(i + 1, desc);
       }
       if (r.tokens) {
-        const t = r.tokens.find((tk) => new RegExp(`\\b${esc(tk)}\\b`, 'i').test(f.text));
+        const t = r.tokens.find((tk) => new RegExp(`\\b${esc(tk)}\\b`, 'i').test(clean));
         if (t) add(Math.max(1, lines.findIndex((l) => new RegExp(`\\b${esc(t)}\\b`, 'i').test(l)) + 1), `Source mentions "${t}"`, true);
       }
     }
@@ -106,7 +108,7 @@ export function findCandidates(skill, repo, ref, files) {
 const dedupe = (cs) => { const s = new Set(); return cs.filter((c) => { const k = `${c.repo}|${c.file}|${c.line}`; return !s.has(k) && s.add(k); }); };
 
 // ---------- evaluation (Gemini confirms cheap signals; rules are the fallback) ----------
-async function evaluateSkill(a, candidates, getText) {
+async function assess(a, candidates, getText) {
   const cands = dedupe(candidates).slice(0, MAX_CANDIDATES);
   if (!cands.length) {
     return {
@@ -124,7 +126,7 @@ async function evaluateSkill(a, candidates, getText) {
       seen.add(k);
       const t = await getText(c.repo, c.file);
       if (t == null) continue;
-      const body = t.slice(0, MAX_FILE);
+      const body = stripComments(t, c.file).slice(0, MAX_FILE);
       if (total + body.length > MAX_PROMPT) continue;
       total += body.length;
       files.push({ path: k, text: body });
@@ -147,6 +149,63 @@ async function evaluateSkill(a, candidates, getText) {
       explanation: `Rule-based assessment (AI confirmation unavailable): ${strong.length} signal(s) found, e.g. ${strong[0].reason} in ${strong[0].file}.`,
     };
   }
+}
+
+// ---------- authorship, dates, dedupe ----------
+const WEEK = 7 * 86_400_000;
+
+/** Effective date for an evidence commit. Order of trust:
+ *  observed (our poller saw the push) > push-event (GitHub's own record) > commit-metadata (author-editable). */
+function stamp(au, ctx) {
+  let at = au.committedAt; let dateSource = 'commit-metadata';
+  if (ctx.observed?.shas.has(au.commitSha)) { at = ctx.observed.at; dateSource = 'observed'; }
+  else if (ctx.pushTimes?.get(au.commitSha)) { at = ctx.pushTimes.get(au.commitSha); dateSource = 'push-event'; }
+  const differs = dateSource !== 'commit-metadata' && Math.abs(new Date(at) - new Date(au.committedAt)) > WEEK;
+  return {
+    commitSha: au.commitSha, commitUrl: au.commitUrl, authorLogin: au.authorLogin, verified: au.verified,
+    committedAt: new Date(at).toISOString(), dateSource, ...(differs ? { claimedAt: au.committedAt } : {}),
+  };
+}
+
+/** Keeps only evidence the user actually committed (one item per file) and stamps commit/author/date.
+ *  Evidence in files the user never touched is dropped; if nothing remains the skill becomes a gap. */
+async function attribute(r, ctx) {
+  if (r.status !== YES || !ctx) return r;
+  const kept = []; const rejected = []; const seen = new Set();
+  for (const e of r.evidence) {
+    const k = `${e.repo}/${e.file}`;
+    if (seen.has(k)) continue; // 100 changes in one file = one piece of evidence
+    seen.add(k);
+    if (e.commitSha) { kept.push(e); continue; } // already verified earlier and the file is unchanged
+    let au;
+    try { au = await ctx.authorship(e.repo, e.file); }
+    catch (err) { if (gh.isRateLimit(err)) throw err; au = undefined; } // unknown, not a rejection
+    if (au === null) rejected.push(k);
+    else kept.push(au ? { ...e, ...stamp(au, ctx) } : { ...e, authorUnverified: true });
+  }
+  if (!kept.length) {
+    return {
+      ...r, status: NOT, confidence: 0.6, evidence: [],
+      explanation: `Related code was found in ${rejected.length} file(s) (${rejected.slice(0, 3).join(', ')}), but no commits by @${ctx.username} touch them, so it is not counted as this student's work.`,
+    };
+  }
+  const note = rejected.length ? ` ${rejected.length} other matching file(s) were ignored because @${ctx.username} did not commit them.` : '';
+  return { ...r, evidence: kept, explanation: `${r.explanation}${note}` };
+}
+
+const evaluateSkill = async (a, candidates, getText, ctx) => attribute(await assess(a, candidates, getText), ctx);
+
+async function makeCtx(username, refOf, observed) {
+  const info = await gh.getPushInfo(username);
+  const memo = new Map();
+  return {
+    username, pushTimes: info.pushTimes, observed,
+    authorship: (repo, file) => {
+      const k = `${repo}:${file}`;
+      if (!memo.has(k)) memo.set(k, gh.fileAuthorship(repo, file, username, refOf(repo)));
+      return memo.get(k);
+    },
+  };
 }
 
 async function pool(items, size, fn) {
@@ -186,10 +245,15 @@ async function extractJobSkills(text) {
 }
 
 // ---------- initial analysis ----------
-async function scanRepo(repo) {
+async function scanRepo(repo, username) {
   const sha = await gh.latestSha(repo.fullName, repo.defaultBranch);
   if (!sha) return null;
-  const tree = (await gh.getTree(repo.fullName, sha)).filter((t) => !SKIP.test(t.path));
+  let tree = (await gh.getTree(repo.fullName, sha)).filter((t) => !SKIP.test(t.path));
+  if (repo.contributed) { // someone else's repo: only look at files this user actually committed
+    const mine = await gh.authoredPaths(repo.fullName, username);
+    tree = tree.filter((t) => mine.has(t.path));
+    if (!tree.length) return null;
+  }
   const depth = (p) => p.split('/').length;
   const toFetch = tree.filter((t) => isEligible(t.path) && t.size <= MAX_FILE)
     .sort((a, b) => (MANIFESTS.test(b.path) - MANIFESTS.test(a.path)) || depth(a.path) - depth(b.path) || a.size - b.size)
@@ -204,7 +268,9 @@ export async function analyzeProfile({ jobUrl, jobText, githubLink }) {
   if (!username) throw new gh.AppError(400, 'Enter a valid GitHub username or profile link.', 'BAD_USER');
   const warnings = [];
 
-  const repos = await gh.listRepos(username);
+  const owned = await gh.listRepos(username);
+  const contributed = await gh.listContributedRepos(username, owned.map((r) => r.fullName));
+  const repos = [...owned, ...contributed];
   if (!repos.length) throw new gh.AppError(422, 'This user has no public, non-fork repositories to analyse.', 'NO_REPOS');
 
   const { skills, by } = await extractJobSkills(jobText);
@@ -212,7 +278,7 @@ export async function analyzeProfile({ jobUrl, jobText, githubLink }) {
   if (by === 'rules') warnings.push('Gemini was unavailable for skill extraction; skills were detected with a keyword list and may be incomplete.');
 
   let scans;
-  try { scans = (await pool(repos, 3, scanRepo)).filter(Boolean); }
+  try { scans = (await pool(repos, 3, (r) => scanRepo(r, username))).filter(Boolean); }
   catch (e) {
     if (gh.isRateLimit(e)) throw new gh.AppError(429, 'GitHub API rate limit reached while scanning repositories. Try again later.', 'GITHUB_RATE_LIMIT');
     throw e;
@@ -223,6 +289,7 @@ export async function analyzeProfile({ jobUrl, jobText, githubLink }) {
   scans.forEach((s) => s.files.forEach((f) => f.text != null && cache.set(`${s.repo.fullName}:${f.path}`, f.text)));
   const refs = Object.fromEntries(scans.map((s) => [s.repo.fullName, s.sha]));
   const getText = makeGetText(cache, (r) => refs[r]);
+  const ctx = await makeCtx(username, (r) => refs[r]);
 
   const firstLine = jobText.split('\n').map((l) => l.trim()).find(Boolean) || 'Job';
   let host = ''; try { host = new URL(jobUrl).hostname.replace(/^www\./, ''); } catch { /* ignore */ }
@@ -230,15 +297,21 @@ export async function analyzeProfile({ jobUrl, jobText, githubLink }) {
 
   const profile = await Profile.findOneAndUpdate(
     { username: username.toLowerCase() },
-    { username: username.toLowerCase(), jobId: job._id, repos: scans.map((s) => ({ fullName: s.repo.fullName, defaultBranch: s.repo.defaultBranch, lastCheckedCommit: s.sha })) },
+    { username: username.toLowerCase(), jobId: job._id, repos: scans.map((s) => ({ fullName: s.repo.fullName, defaultBranch: s.repo.defaultBranch, contributed: Boolean(s.repo.contributed), lastCheckedCommit: s.sha })) },
     { upsert: true, new: true, setDefaultsOnInsert: true },
   );
 
-  const docs = await pool(skills, 2, async (s) => {
-    const cands = scans.flatMap((sc) => findCandidates(s.skill, sc.repo.fullName, sc.sha, sc.files));
-    const r = await evaluateSkill(s, cands, getText);
-    return { profileId: profile._id, skill: s.skill, importance: s.importance, jobSnippet: s.jobSnippet, ...r, updatedAt: new Date() };
-  });
+  let docs;
+  try {
+    docs = await pool(skills, 2, async (s) => {
+      const cands = scans.flatMap((sc) => findCandidates(s.skill, sc.repo.fullName, sc.sha, sc.files));
+      const r = await evaluateSkill(s, cands, getText, ctx);
+      return { profileId: profile._id, skill: s.skill, importance: s.importance, jobSnippet: s.jobSnippet, ...r, updatedAt: new Date() };
+    });
+  } catch (e) {
+    if (gh.isRateLimit(e)) throw new gh.AppError(429, 'GitHub API rate limit reached while verifying authorship. Try again later.', 'GITHUB_RATE_LIMIT');
+    throw e;
+  }
   if (docs.some((d) => d.source === 'rules' && d.evidence.length && /unavailable/.test(d.explanation))) warnings.push('Gemini was unavailable for some skills; those were assessed with rule-based signals only.');
 
   await Assessment.deleteMany({ profileId: profile._id });
@@ -255,7 +328,7 @@ export async function getView(username) {
     Assessment.find({ profileId: profile._id }).sort({ importance: -1, skill: 1 }).lean(),
     AssessmentHistory.find({ profileId: profile._id }).sort({ time: -1 }).limit(50).lean(),
   ]);
-  return { profile: { username: profile.username, repos: profile.repos }, job, assessments, history };
+  return { profile: { username: profile.username, repos: profile.repos }, job, assessments: assessments.map(decorate), history };
 }
 
 // ---------- incremental re-assessment ----------
@@ -270,15 +343,32 @@ export async function applyChange(profileId, fullName, newSha) {
     const repo = profile?.repos.find((r) => r.fullName.toLowerCase() === fullName.toLowerCase());
     if (!repo || repo.lastCheckedCommit === newSha) return;
 
-    let files;
+    let change;
     try {
-      files = repo.lastCheckedCommit ? await gh.compare(repo.fullName, repo.lastCheckedCommit, newSha) : await gh.commitFiles(repo.fullName, newSha);
+      change = repo.lastCheckedCommit ? await gh.compare(repo.fullName, repo.lastCheckedCommit, newSha) : await gh.commitFiles(repo.fullName, newSha);
     } catch (e) {
-      if (e.status === 404 || e.status === 422) files = await gh.commitFiles(repo.fullName, newSha); // e.g. force-push
+      if (e.status === 404 || e.status === 422) change = await gh.commitFiles(repo.fullName, newSha); // e.g. force-push
       else throw e;
     }
+    const { files, commitCount, commits } = change;
     const changed = new Set();
     files.forEach((f) => { changed.add(f.path); if (f.previous) changed.add(f.previous); });
+    const base = {
+      profileId, time: new Date(), repo: repo.fullName, commit: newSha, changedFiles: [...changed],
+      commitCount, commitUrl: `https://github.com/${repo.fullName}/commit/${newSha}`,
+      authors: [...new Set(commits.map((c) => c.author).filter(Boolean))],
+    };
+    const done = () => Profile.updateOne({ _id: profileId, 'repos.fullName': repo.fullName }, { $set: { 'repos.$.lastCheckedCommit': newSha } });
+
+    // Fake-commit guard: whitespace / comment / re-indent only changes never trigger a reassessment.
+    const relevant = files.filter((f) => isEligible(f.path) || (f.previous && isEligible(f.previous)));
+    if (isTrivialChange(relevant)) {
+      const history = await AssessmentHistory.create({ ...base, skillChanges: [], ignoredTrivial: true, note: 'Trivial change ignored: only whitespace, comments or formatting changed.' });
+      await done();
+      broadcast('reassessment', { username: profile.username, history: history.toObject(), assessments: [] });
+      console.log(`[change] ${fullName}@${newSha.slice(0, 7)}: trivial change ignored (${commitCount} commit(s))`);
+      return;
+    }
 
     // Re-scan ONLY changed files that still exist
     const live = files.filter((f) => f.status !== 'removed' && !SKIP.test(f.path));
@@ -293,26 +383,27 @@ export async function applyChange(profileId, fullName, newSha) {
     const cache = new Map();
     records.forEach((r) => r.text != null && cache.set(`${repo.fullName}:${r.path}`, r.text));
     const getText = makeGetText(cache, (r) => refMap[r]);
+    const ctx = await makeCtx(profile.username, (r) => refMap[r], { shas: new Set(commits.map((c) => c.sha)), at: new Date().toISOString() });
 
     const isChanged = (e) => e.repo === repo.fullName && changed.has(e.file);
     const skillChanges = []; const updated = [];
     for (const a of await Assessment.find({ profileId })) {
       const touched = a.evidence.some(isChanged);
-      const retained = a.evidence.filter((e) => !isChanged(e)).map((e) => ({ repo: e.repo, file: e.file, line: e.line, url: e.url, reason: e.reason }));
+      const retained = a.evidence.filter((e) => !isChanged(e)).map((e) => { const { _id, ...rest } = e.toObject ? e.toObject() : e; return rest; });
       const fresh = findCandidates(a.skill, repo.fullName, newSha, records);
       if (!touched && !fresh.length) continue; // skill unaffected by this commit
-      const r = await evaluateSkill(a, [...retained, ...fresh], getText);
+      const r = await evaluateSkill(a, [...retained, ...fresh], getText, ctx);
       const from = a.status;
       a.set({ ...r, updatedAt: new Date() });
       await a.save();
       skillChanges.push({ skill: a.skill, from, to: r.status });
-      updated.push(a.toObject());
+      updated.push(decorate(a.toObject()));
     }
 
-    const history = await AssessmentHistory.create({ profileId, time: new Date(), repo: repo.fullName, commit: newSha, changedFiles: [...changed], skillChanges });
-    await Profile.updateOne({ _id: profileId, 'repos.fullName': repo.fullName }, { $set: { 'repos.$.lastCheckedCommit': newSha } });
+    const history = await AssessmentHistory.create({ ...base, skillChanges });
+    await done();
     broadcast('reassessment', { username: profile.username, history: history.toObject(), assessments: updated });
-    console.log(`[change] ${fullName}@${newSha.slice(0, 7)}: ${changed.size} file(s), ${skillChanges.length} skill(s) reassessed`);
+    console.log(`[change] ${fullName}@${newSha.slice(0, 7)}: ${commitCount} commit(s), ${changed.size} file(s), ${skillChanges.length} skill(s) reassessed`);
   } catch (e) {
     console.error(`[change] failed for ${fullName}:`, e.message); // lastCheckedCommit not advanced, so it is retried next tick
   } finally {

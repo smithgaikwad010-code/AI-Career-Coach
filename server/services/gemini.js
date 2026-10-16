@@ -57,12 +57,19 @@ export async function confirmSkill({ skill, jobSnippet, candidates, files }) {
   const prompt = `You verify whether a student's GitHub code demonstrates ONE skill required by a job.
 Skill: ${skill}
 Job text: ${jobSnippet || '(n/a)'}
-Be strict: trivial mentions, empty files, or boilerplate do not demonstrate a skill. Judge only from the material below.
+Be strict. Judge only from the material below.
+
+STRICT RULES - these do NOT count as evidence:
+- comments (they are already blanked out), commented-out code, dead or unreachable code
+- skill names appearing only in string literals used as log messages, documentation, README text or variable names
+- empty files, placeholder or boilerplate content, files that only list the skill without using it
+- code that merely imports a library but never uses it
+Evidence must be real, working use of the skill: executed queries, actual routes, real components, real configuration.
 
 CANDIDATE EVIDENCE (index, location, signal):
 ${cands}
 
-FILE CONTENTS:
+FILE CONTENTS (comments blanked, line numbers kept):
 ${body || '(only file names / dependency signals available)'}
 
 Return ONLY JSON: {"demonstrated": boolean, "confidence": number 0-1, "explanation": "1-3 sentences citing file paths", "supporting": [{"index": number, "reason": "short reason"}]}`;

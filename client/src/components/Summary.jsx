@@ -3,13 +3,14 @@ export default function Summary({ assessments, job, repos, username }) {
   const pool = req.length ? req : assessments;
   const done = pool.filter((a) => a.status === 'demonstrated').length;
   const pct = pool.length ? Math.round((done / pool.length) * 100) : 0;
+  const old = pool.filter((a) => a.status === 'demonstrated' && (a.recency === 'old' || a.recency === 'dated')).length;
   return (
     <div className="panel summary">
       <div className="ring" style={{ '--p': `${pct}%` }} role="img" aria-label={`${pct}% of skills demonstrated`}>
         <b>{pct}%</b>
       </div>
       <div>
-        <h2>{done} of {pool.length} {req.length ? 'required ' : ''}skills demonstrated</h2>
+        <h2>{done} of {pool.length} {req.length ? 'required ' : ''}skills demonstrated{old > 0 && `, ${old} only from older evidence`}</h2>
         <p>
           Job: <a href={job.sourceUrl} target="_blank" rel="noopener noreferrer">{job.title}</a>
           <span className="muted"> ({job.company})</span>
@@ -21,6 +22,7 @@ export default function Summary({ assessments, job, repos, username }) {
         <div className="pills">
           <span className="pill ok">{done} demonstrated</span>
           <span className="pill gap">{pool.length - done} not demonstrated in this scope</span>
+          {old > 0 && <span className="pill gap">{old} only from older evidence</span>}
         </div>
       </div>
     </div>
