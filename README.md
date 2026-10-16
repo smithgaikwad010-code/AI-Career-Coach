@@ -8,7 +8,7 @@ Stack: React (Vite) + plain CSS, Node/Express, MongoDB (Mongoose), Gemini (`@goo
 
 ## Setup
 
-Requirements: Node 18+, a free MongoDB Atlas cluster, a Gemini API key, a GitHub personal access token (no scopes needed for public repos).
+Requirements: Node 18+, a free MongoDB Atlas cluster, a Gemini API key, a GitHub personal access token (no scopes needed for public repos)
 
 ```bash
 # 1. Backend
